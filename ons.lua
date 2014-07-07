@@ -1,5 +1,5 @@
 local m = {}
-require('enet')
+--require('enet')
 --settings: create, client, server, relay, lerp, tick
 
 --called when enet event occures
@@ -71,7 +71,7 @@ local function serialize(t)
     for i = 1, #t do
         local e = t[i]
         if type(e) == 'number' then
-            s = s .. tostring(e)
+            s = s .. '%' .. tostring(e)
         elseif type(e) == 'string' then
             s = s .. '"' .. strEscape(e)  .. '"'
         elseif type(e) == 'table' and e['_ons'] then
@@ -85,12 +85,58 @@ local function serialize(t)
     return s
 end
 
-local function unserialize(s, world)
+local function deserialize(s, world)
     local t = {}
+    local mode = ''
+    local i = 1
+    local b = 1 -- first symbol
+    local e = 1 -- last symbol
+    while i <= #s do
+        local c = s:sub(i, i)
+        if mode == '' then
+            if c == '"' then
+                mode = 'string'
+                b = i + 1
+            elseif c == '%' then
+                mode = 'number'
+                b = i + 1
+            elseif c == '#' then
+                mode = 'object'
+                b = i + 1
+            end
+        elseif mode == 'string' then
+            if c == '\\' then
+                i = i + 1
+            elseif c == '"' then
+                mode = ''
+                e = i - 1
+                t[#t+1] = strUnescape(s:sub(b, e))
+            end
+        elseif mode == 'number' then
+            if c == ' ' then
+                mode = ''
+                e = i - 1
+                t[#t+1] = tonumber(s:sub(b, e))
+            end
+        elseif mode == 'object' then
+            if c == ' ' then
+                mode = ''
+                e = i - 1
+                local id = tonumber(s:sub(b, e))
+                for j = 1, #world do
+                    if world[j]._ons.id == id then
+                        t[#t+1] = world[j]
+                        break
+                    end
+                end
+            end
+        end
+        i = i + 1
+    end
     return t
 end
 
-local function m.create(settings)
+local function create(settings)
     local ons = {}
     ons.curId = 0
     ons.world = {}
@@ -113,5 +159,24 @@ local function m.create(settings)
         local event = host:service()
     end
 end
+m.create = create
+--test
+do
+    local serializetest = false
+    if serializetest then
+        local obj1 = {_ons = {id = 4}}
+        local obj2 = {_ons = {id = 10}}
+        local world = {obj1, obj2}
+        local testTable = {'hello \\ """ \\" world', 5, obj1, 15, 13.04, obj2, 'blu""r"gh!'}
+        local s = serialize(testTable)
+        print(s)
+        local u = deserialize(s, world)
+        for i = 1, #testTable do
+            print("Checking " .. tostring(u[i]) .. ' == ' .. tostring(testTable[i]))
+            assert(testTable[i] == u[i])
+        end
+    end
+end
+--
 
 return m
