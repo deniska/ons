@@ -66,15 +66,20 @@ local function strUnescape(e)
     return s
 end
 
-local function serialize(t, world)
+local function serialize(t)
     local s = ""
-    for i = 1, #t
+    for i = 1, #t do
         local e = t[i]
         if type(e) == 'number' then
-            s = s .. tostring(number)
+            s = s .. tostring(e)
         elseif type(e) == 'string' then
-            local escaped = e:gsub("\\")
-            local a = '"' .. escaped .. '"'
+            s = s .. '"' .. strEscape(e)  .. '"'
+        elseif type(e) == 'table' and e['_ons'] then
+            local id = e._ons.id
+            s = s .. "#" .. tostring(id)
+        end
+        if i ~= #t then
+            s = s .. " "
         end
     end
     return s
