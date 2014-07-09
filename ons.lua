@@ -1,40 +1,6 @@
 local m = {}
---require('enet')
---settings: create, client, server, relay, lerp, tick
+require('enet')
 
---called when enet event occures
-local function onEvent(event, ons)
-
-end
-
---called when patched object function call occures
-local function onCall(call, params, type, ons)
-
-end
-
-local function wrap(obj, list, type, ons)
-    obj._ons[type] = {}
-    for i = 1, #list do
-        local f = list[i]
-        obj._ons[type][f] = obj[f]
-        obj[f] = function(...)
-            onCall(f, {...}, type, ons)
-            obj._ons[type][f](...)
-        end
-    end
-end
-
-local function createObject(settings, ons)
-    local obj = settings.create()
-    ons.curId = ons.curId + 1
-    obj._ons = {}
-    obj._ons.id = ons.curId
-    wrap(obj, settings.client, 'client', ons)
-    wrap(obj, settings.server, 'server', ons)
-    wrap(obj, settings.relay, 'relay', ons)
-    ons.world[#ons.world + 1] = obj
-    return obj
-end
 
 local function strEscape(s)
     local e = ''
@@ -123,12 +89,7 @@ local function deserialize(s, world)
                 mode = ''
                 e = i - 1
                 local id = tonumber(s:sub(b, e))
-                for j = 1, #world do
-                    if world[j]._ons.id == id then
-                        t[#t+1] = world[j]
-                        break
-                    end
-                end
+                t[#t+1] = findObjectById(world, id)
             end
         end
         i = i + 1
@@ -136,28 +97,243 @@ local function deserialize(s, world)
     return t
 end
 
+
+--settings: create, client, server, relay, lerp, tick
+
+--called when enet event occures
+
+local function findObjectById(world, id)
+    for j = 1, #world do
+        if world[j]._ons.id == id then
+            return world[j]
+        end
+    end
+end
+
+local function log(ons, m)
+    if ons.debug then
+        print(m)
+    end
+end
+
+local function wrap(obj, list, type, ons)
+    obj._ons[type] = {}
+    obj._ons.real = obj._ons.real or {}
+    if list == nil then return end
+    for i = 1, #list do
+        local f = list[i]
+        obj._ons[type][f] = obj[f]
+        obj._ons.real[f] = obj[f]
+        obj[f] = function(...)
+            onCall(f, {...}, type, ons)
+            obj._ons[type][f](...)
+        end
+    end
+end
+
+local function createObject(ons, id)
+    local settings = ons.settings
+    local obj = settings.create()
+    ons.curId = ons.curId + 1
+    id = id or ons.curId
+    obj._ons = {}
+    obj._ons.id = ons.curId
+    wrap(obj, settings.client, 'client', ons)
+    wrap(obj, settings.server, 'server', ons)
+    wrap(obj, settings.relay, 'relay', ons)
+    ons.world[#ons.world + 1] = obj
+    return obj
+end
+
+local function deleteObject(ons, id)
+    local newWorld = {}
+    for i = 1, #ons.world do
+        if ons.world[i]._ons.id ~= id then
+            newWorld[#newWorld + 1] = ons.world[i] 
+        end
+    end
+    ons.world = newWorld
+end
+
+--protocol
+--{"!C", id1, id2...} server -> client on new client connect
+--{"!D", id1, id2...} server -> client on client disconnect
+--{"!I", id} server -> client send clientObject id
+--{method, param1, param2...} server <-> client on method call, param1 is obj
+
+local function onEvent(event, ons)
+    if event.type == 'connect' then
+        if ons.type == 'server' then
+            event.peer:ping_interval(50)
+            log(ons, 'Client connected to server')
+            --create object
+            local t = createObject(ons)
+            t._ons.peer = event.peer
+            --send world info to client
+            local msg = {"!C"}
+            for i = 1, #ons.world do
+                msg[#msg + 1] = ons.world[i]._ons.id
+            end
+            event.peer:send(serialize(msg), 1)
+            event.peer:send(serialize({"!I", t._ons.id}), 1)
+            --send info about client to the world
+            local m = serialize({"!C", t._ons.id})
+            for i = 1, #ons.world do
+                if ons.world[i] ~= t then
+                    ons.world[i]._ons.peer:send(m, 1)
+                end
+            end
+            if ons.onCreateHandler then
+                ons.onCreateHandler(o)
+            end
+        end
+    elseif event.type == 'receive' then
+        log(ons, event.data)
+        local t = deserialize(event.data)
+        if #t < 2 then return end
+        if ons.type == 'client' then
+            if t[1] == "!C" then
+                --create objects
+                for i = 2, #t do
+                    local o = createObject(ons, t[i])
+                    if ons.onCreateHandler then
+                        ons.onCreateHandler(o)
+                    end
+                end
+            elseif t[1] == "!D" then
+                --delete objects
+                for i = 2, #t do
+                    local o = findObjectById(ons.world, t[i])
+                    if ons.onDeleteHandler then
+                        ons.onDeleteHandler(o)
+                    end
+                    deleteObject(ons, t[i])
+                end
+            elseif type[t[1]] == 'table' and t[1]._ons then
+                --call real method
+                local params = {}
+                for i = 2, #t do
+                    params[#params + 1] = t[i]
+                end
+                t[1]._ons.real[t[2]](unpack(params))
+            elseif t[1] == "!I" then
+                local id = t[2]
+                local o = findObjectById(ons.world, id)
+                ons.clientObject = o
+            end
+        elseif ons.type == 'server' then
+            --if relay or client, call real method
+            if type(t[2]) == 'table' and t[2]._ons then
+                local o = t[2]
+                if o._ons.peer ~= event.peer then return end --can't call others methods
+                local m = t[1]
+                local params = {}
+                if o._ons.relay[m] or o._ons.client[m] then
+                    for i = 2, #t do
+                        params[#params + 1] = t[i]
+                    end
+                    o._ons.real[m](unpack(params))
+                end
+                --relay relayed methods
+                if o._ons.relay[m] then
+                    for i = 1, #ons.world do
+                        if ons.world[i] ~= o then
+                            ons.world[i].peer:send(event.data, 1)
+                        end
+                    end
+                end
+            end
+        end
+    elseif event.type == 'disconnect' then
+        if ons.type == 'server' then
+            log(ons, 'Client disconnected from server')
+            local o = nil
+            for i = 1, #ons.world do
+                if ons.world[i]._ons.peer == event.peer then
+                    o = ons.world[i]
+                    break
+                end
+            end
+            if o then
+                ons.enethost:broadcast(serialize({"!D", o._ons.id}), 1)
+                if ons.onDeleteHandler then
+                    ons.onDeleteHandler(o)
+                end
+                deleteObject(ons, o._ons.id)
+            end
+        end
+    end
+end
+
+--called when patched object function call occures
+local function onCall(call, params, type, ons)
+    local msg = {call}
+    local obj = params[1]
+    for i = 1, #params do
+        msg[#msg + 1] = params[i]
+    end
+    if ons.type == 'client' then
+        --may call client or relay methods, only yourself
+        if (obj._ons.client[call] or obj._ons.relay[call]) and obj == ons.clientObject then
+            ons.conn:send(serialize(msg), 1)
+        end 
+    elseif ons.type == 'server' then
+        --may call server or relay
+        if obj._ons.server[call] or obj._ons.relay[call] then
+            ons.enethost:broadcast(serialize(msg), 1)
+        end
+    end
+end
+
 local function create(settings)
     local ons = {}
+    if settings.debug then
+        ons.debug = true
+    else
+        ons.debug = false
+    end
+    ons.settings = settings
     ons.curId = 0
     ons.world = {}
     ons.enethost = nil
     ons.clientObject = nil
     ons.type = 'offline'
     ons.host = function(self, addr)
-        self.enethost = enet.create_host(settings.addr, 64, 2)
+        self.enethost = enet.host_create(addr, 64, 2)
         ons.type = 'server'
     end
     ons.connect = function(self, addr)
-        self.enethost = enet.create_host(nil, 1, 2)
-        self.conn = self.enethost:connect(addr)
+        self.enethost = enet.host_create()
+        self.conn = self.enethost:connect(addr, 2)
         self.type = 'client'
     end
     ons.getType = function(self)
         return self.type
     end
     ons.update = function(self, dt)
-        local event = host:service()
+        local ev = self.enethost:service()
+        if ev ~= nil then
+            onEvent(ev, self)
+            while true do
+                local event = self.enethost:check_events()
+                if event ~= nil then
+                    onEvent(event, self)
+                else
+                    break
+                end
+            end
+        end
     end
+    ons.onConnect = function(self, f)
+        self.onConnectHandler = f
+    end
+    ons.onDisconnect = function(self, f)
+        self.onDisconnectHandler = f
+    end
+    ons.onTick = function(self, f)
+        self.onTickHandler = f
+    end
+    return ons
 end
 m.create = create
 --test
