@@ -1,6 +1,13 @@
 local m = {}
 require('enet')
 
+local function findObjectById(world, id)
+    for j = 1, #world do
+        if world[j]._ons.id == id then
+            return world[j]
+        end
+    end
+end
 
 local function strEscape(s)
     local e = ''
@@ -52,6 +59,7 @@ local function serialize(t)
 end
 
 local function deserialize(s, world)
+    s = s .. " "
     local t = {}
     local mode = ''
     local i = 1
@@ -100,19 +108,31 @@ end
 
 --settings: create, client, server, relay, lerp, tick
 
---called when enet event occures
-
-local function findObjectById(world, id)
-    for j = 1, #world do
-        if world[j]._ons.id == id then
-            return world[j]
-        end
-    end
-end
-
 local function log(ons, m)
     if ons.debug then
         print(m)
+    end
+end
+
+--called when patched object function call occures
+local function onCall(call, params, type, ons)
+    local msg = {call}
+    local obj = params[1]
+    for i = 1, #params do
+        msg[#msg + 1] = params[i]
+    end
+    if ons.type == 'client' then
+        --may call client or relay methods, only yourself
+        if (obj._ons.client[call] or obj._ons.relay[call]) and obj == ons.clientObject then
+            ons.conn:send(serialize(msg), 1)
+        end 
+    elseif ons.type == 'server' then
+        --may call server or relay or private
+        if obj._ons.server[call] or obj._ons.relay[call] then
+            ons.enethost:broadcast(serialize(msg), 1)
+        elseif obj._ons.private[call] then
+            obj._ons.peer:send(serialize(msg), 1)
+        end
     end
 end
 
@@ -136,16 +156,19 @@ local function createObject(ons, id)
     local obj = settings.create()
     ons.curId = ons.curId + 1
     id = id or ons.curId
+    log(ons, 'Creating object with id ' .. id)
     obj._ons = {}
-    obj._ons.id = ons.curId
+    obj._ons.id = id
     wrap(obj, settings.client, 'client', ons)
     wrap(obj, settings.server, 'server', ons)
     wrap(obj, settings.relay, 'relay', ons)
+    wrap(obj, settings.private, 'private', ons)
     ons.world[#ons.world + 1] = obj
     return obj
 end
 
 local function deleteObject(ons, id)
+    log(ons, "Deleting object with id " .. id)
     local newWorld = {}
     for i = 1, #ons.world do
         if ons.world[i]._ons.id ~= id then
@@ -184,12 +207,12 @@ local function onEvent(event, ons)
                 end
             end
             if ons.onCreateHandler then
-                ons.onCreateHandler(o)
+                ons.onCreateHandler(t)
             end
+            log(ons, 'Number of clients: ' .. tostring(#ons.world))
         end
     elseif event.type == 'receive' then
-        log(ons, event.data)
-        local t = deserialize(event.data)
+        local t = deserialize(event.data, ons.world)
         if #t < 2 then return end
         if ons.type == 'client' then
             if t[1] == "!C" then
@@ -209,14 +232,15 @@ local function onEvent(event, ons)
                     end
                     deleteObject(ons, t[i])
                 end
-            elseif type[t[1]] == 'table' and t[1]._ons then
+            elseif type(t[2]) == 'table' and t[2]._ons then
                 --call real method
                 local params = {}
                 for i = 2, #t do
                     params[#params + 1] = t[i]
                 end
-                t[1]._ons.real[t[2]](unpack(params))
+                t[2]._ons.real[t[1]](unpack(params))
             elseif t[1] == "!I" then
+                log(ons, 'Id is ' .. t[2])
                 local id = t[2]
                 local o = findObjectById(ons.world, id)
                 ons.clientObject = o
@@ -238,7 +262,7 @@ local function onEvent(event, ons)
                 if o._ons.relay[m] then
                     for i = 1, #ons.world do
                         if ons.world[i] ~= o then
-                            ons.world[i].peer:send(event.data, 1)
+                            ons.world[i]._ons.peer:send(event.data, 1)
                         end
                     end
                 end
@@ -261,26 +285,7 @@ local function onEvent(event, ons)
                 end
                 deleteObject(ons, o._ons.id)
             end
-        end
-    end
-end
-
---called when patched object function call occures
-local function onCall(call, params, type, ons)
-    local msg = {call}
-    local obj = params[1]
-    for i = 1, #params do
-        msg[#msg + 1] = params[i]
-    end
-    if ons.type == 'client' then
-        --may call client or relay methods, only yourself
-        if (obj._ons.client[call] or obj._ons.relay[call]) and obj == ons.clientObject then
-            ons.conn:send(serialize(msg), 1)
-        end 
-    elseif ons.type == 'server' then
-        --may call server or relay
-        if obj._ons.server[call] or obj._ons.relay[call] then
-            ons.enethost:broadcast(serialize(msg), 1)
+            log(ons, 'Number of clients: ' .. tostring(#ons.world))
         end
     end
 end
@@ -298,6 +303,12 @@ local function create(settings)
     ons.enethost = nil
     ons.clientObject = nil
     ons.type = 'offline'
+    ons.getClientObject = function(self)
+        return self.clientObject
+    end
+    ons.getWorld = function(self)
+        return self.world
+    end
     ons.host = function(self, addr)
         self.enethost = enet.host_create(addr, 64, 2)
         ons.type = 'server'
@@ -324,11 +335,11 @@ local function create(settings)
             end
         end
     end
-    ons.onConnect = function(self, f)
-        self.onConnectHandler = f
+    ons.onCreate = function(self, f)
+        self.onCreateHandler = f
     end
-    ons.onDisconnect = function(self, f)
-        self.onDisconnectHandler = f
+    ons.onDelete = function(self, f)
+        self.onDeleteHandler = f
     end
     ons.onTick = function(self, f)
         self.onTickHandler = f
@@ -343,7 +354,7 @@ do
         local obj1 = {_ons = {id = 4}}
         local obj2 = {_ons = {id = 10}}
         local world = {obj1, obj2}
-        local testTable = {'hello \\ """ \\" world', 5, obj1, 15, 13.04, obj2, 'blu""r"gh!'}
+        local testTable = {'hello \\ """ \\" world', 5, obj1, obj1, obj2, 15, 13.04, obj2, 'blu""r"gh!', 20}
         local s = serialize(testTable)
         print(s)
         local u = deserialize(s, world)
