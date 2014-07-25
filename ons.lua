@@ -163,6 +163,15 @@ local function createObject(ons, id)
     wrap(obj, settings.server, 'server', ons)
     wrap(obj, settings.relay, 'relay', ons)
     wrap(obj, settings.private, 'private', ons)
+    obj._ons.frames = {}
+    for i = 1, 3 do
+        obj._ons.frames[i] = {}
+        for j = 1, #ons.settings.lerp do
+            obj._ons.frames[i][ons.settings.lerp[j]] = obj[ons.settings.lerp[j]]
+        end
+    end
+    obj._lerp = obj._ons.frames[3]
+    obj._ons.ticktimer = ons.tick
     ons.world[#ons.world + 1] = obj
     return obj
 end
@@ -176,6 +185,16 @@ local function deleteObject(ons, id)
         end
     end
     ons.world = newWorld
+end
+
+local function lerpShift(obj, ons)
+    local lerps = ons.settings.lerp
+    for i = 1, #lerps do
+        for j = 2, 3 do
+            obj._ons.frames[j - 1][lerps[i]] = obj._ons.frames[j][lerps[i]]
+        end
+    end
+    obj._ons.ticktimer = obj._ons.ticktimer + ons.tick
 end
 
 --protocol
@@ -231,6 +250,26 @@ local function onEvent(event, ons)
                         ons.onDeleteHandler(o)
                     end
                     deleteObject(ons, t[i])
+                end
+            elseif t[1] == "!L" then
+                local lerps = ons.settings.lerp
+                local k = 1
+                local curObj = nil
+                for j = 2, #t do
+                    if type(t[j]) == 'table' and t[j]._ons then
+                        k = 1
+                        curObj = t[j]
+                        --lerpShift(curObj, ons)
+                    elseif type(t[j]) == 'number' then
+                        if curObj then
+                            local l = lerps[k]
+                            if l then
+                                curObj._lerp[l] = t[j]
+                            end
+                            k = k + 1
+                        end
+                    end
+                    --log(ons, "Lerp recv: " .. t[3] .. " " .. t[4])
                 end
             elseif type(t[2]) == 'table' and t[2]._ons then
                 --call real method
@@ -290,6 +329,66 @@ local function onEvent(event, ons)
     end
 end
 
+local function lerp(a, b, c)
+    return a + (b - a) * c
+end
+
+local function isUpdated(obj, ons)
+    local lerps = ons.settings.lerp
+    for i = 1, #ons.settings.lerp do
+        local v1 = obj._ons.frames[2][lerps[i]]
+        local v2 = obj._ons.frames[3][lerps[i]]
+        if v1 ~= v2 then return true end
+    end
+    return false
+end
+
+local function lerpSend(ons)
+    if ons.type ~= 'server' then return end
+    local lerps = ons.settings.lerp
+    for i = 1, #ons.world do
+        local peer = ons.world[i]._ons.peer
+        local msg = {"!L"}
+        for j = 1, #ons.world do
+            local obj = ons.world[j]
+            if i ~= j and isUpdated(obj, ons) then
+                msg[#msg + 1] = obj
+                for k = 1, #lerps do
+                    msg[#msg + 1] = obj._ons.frames[3][lerps[k]]
+                end
+            end
+            peer:send(serialize(msg), 0)
+        end
+    end
+    for i = 1, #ons.world do
+        lerpShift(ons.world[i], ons)
+    end
+end
+
+local function lerpUpdate(ons, dt)
+    local lerps = ons.settings.lerp
+    --local t = (ons.tick - ons.ticktimer) / ons.tick
+    for i = 1, #ons.world do
+        local obj = ons.world[i]
+        obj._ons.ticktimer = obj._ons.ticktimer - dt
+    end
+    for i = 1, #ons.world do
+        local obj = ons.world[i]
+        if obj ~= ons:getClientObject() then
+            for j = 1, #lerps do
+                local t = (ons.tick - obj._ons.ticktimer) / ons.tick
+                local v1 = obj._ons.frames[1][lerps[j]]
+                local v2 = obj._ons.frames[2][lerps[j]]
+                obj[lerps[j]] = lerp(v1, v2, t)
+                if obj._ons.ticktimer < 0 then
+                    --obj._ons.ticktimer = obj._ons.ticktimer + ons.tick
+                    lerpShift(obj, ons)
+                end
+            end
+        end
+    end
+end
+
 local function create(settings)
     local ons = {}
     if settings.debug then
@@ -303,6 +402,8 @@ local function create(settings)
     ons.enethost = nil
     ons.clientObject = nil
     ons.type = 'offline'
+    ons.tick = settings.tick or 50
+    ons.ticktimer = ons.tick
     ons.getClientObject = function(self)
         return self.clientObject
     end
@@ -334,6 +435,15 @@ local function create(settings)
                 end
             end
         end
+        self.ticktimer = self.ticktimer - dt
+        if self.ticktimer <= 0 then
+            if self.onTickHandler then
+                self.onTickHandler()
+            end
+            lerpSend(self)
+            self.ticktimer = self.ticktimer + self.settings.tick
+        end
+        lerpUpdate(self, dt)
     end
     ons.onCreate = function(self, f)
         self.onCreateHandler = f
@@ -343,6 +453,14 @@ local function create(settings)
     end
     ons.onTick = function(self, f)
         self.onTickHandler = f
+    end
+    ons.disconnect = function(self, obj)
+        if self:getType() == 'server' and obj then
+            obj.peer:disconnect()
+        elseif self:getType() == 'client' then
+            self.conn:disconnect()
+            self.enethost:flush()
+        end
     end
     return ons
 end
