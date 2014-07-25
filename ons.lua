@@ -465,23 +465,5 @@ local function create(settings)
     return ons
 end
 m.create = create
---test
-do
-    local serializetest = false
-    if serializetest then
-        local obj1 = {_ons = {id = 4}}
-        local obj2 = {_ons = {id = 10}}
-        local world = {obj1, obj2}
-        local testTable = {'hello \\ """ \\" world', 5, obj1, obj1, obj2, 15, 13.04, obj2, 'blu""r"gh!', 20}
-        local s = serialize(testTable)
-        print(s)
-        local u = deserialize(s, world)
-        for i = 1, #testTable do
-            print("Checking " .. tostring(u[i]) .. ' == ' .. tostring(testTable[i]))
-            assert(testTable[i] == u[i])
-        end
-    end
-end
---
 
 return m
