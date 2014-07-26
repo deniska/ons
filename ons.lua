@@ -47,6 +47,12 @@ local function serialize(t)
             s = s .. '%' .. tostring(e)
         elseif type(e) == 'string' then
             s = s .. '"' .. strEscape(e)  .. '"'
+        elseif type(e) == 'boolean' then
+            if e then
+                s = s .. 't'
+            else
+                s = s .. 'f'
+            end
         elseif type(e) == 'table' and e['_ons'] then
             local id = e._ons.id
             s = s .. "#" .. tostring(id)
@@ -77,6 +83,10 @@ local function deserialize(s, world)
             elseif c == '#' then
                 mode = 'object'
                 b = i + 1
+            elseif c == 't' then
+                t[#t+1] = true
+            elseif c == 'f' then
+                t[#t+1] = false
             end
         elseif mode == 'string' then
             if c == '\\' then
