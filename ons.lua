@@ -1,3 +1,6 @@
+-- Copyright (c) 2014 Denis Pobedrya <denis.pobedrya@gmail.com>
+-- The code is licensed under MIT license, see LICENSE file for more info
+
 local m = {}
 require('enet')
 
