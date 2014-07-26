@@ -47,7 +47,7 @@ be sent only to a specific client
 `client` methods are methods which may be called on a client and calls will not be
 broadcasted  
 `server` methods are methods which *may not* be called on a client and calls will
-be  
+be broadcasted  
 `lerp` are numeric values which will be linearly interpolated on server and client sides, change
 values in `_lerp` table on server side to change those values  
 `tick` is a period of time between frame updates from a server  
