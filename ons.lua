@@ -211,6 +211,7 @@ end
 --{"!C", id1, id2...} server -> client on new client connect
 --{"!D", id1, id2...} server -> client on client disconnect
 --{"!I", id} server -> client send clientObject id
+--{"!L", id1, v1, v2... vn, id2, v1, v2, vn...} server -> client lerped values
 --{method, param1, param2...} server <-> client on method call, param1 is obj
 
 local function onEvent(event, ons)
