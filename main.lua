@@ -31,6 +31,7 @@ local settings = {
     private = {'init'},
     client = {'move'},
     lerp = {'x', 'y'},
+    unreliable = {'move'},
     tick = 0.05,
     debug = true
 }

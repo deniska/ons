@@ -35,6 +35,7 @@ Then you need to set up a settings table.
         relay = {'chat', 'setred'},
         private = {'init'},
         client = {'move'},
+        unreliable = {'move'},
         lerp = {'x', 'y'},
         tick = 0.05,
         debug = true
@@ -51,6 +52,7 @@ be broadcasted
 `lerp` are numeric values which will be linearly interpolated on server and client sides, change
 values in `_lerp` table on server side to change those values  
 `tick` is a period of time between frame updates from a server  
+`unreliable` methods do not have to be delivered
 `debug = true` will print out some useful info in a terminal
 
 To create a system, use ons.create method:

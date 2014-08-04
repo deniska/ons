@@ -127,8 +127,24 @@ local function log(ons, m)
     end
 end
 
+local function isReliable(ons, f)
+    for i = 1, #ons.settings.unreliable do
+        local name = #ons.settings.unreliable[i]
+        if f == name then
+            return false
+        end
+    end
+    return true
+end
+
 --called when patched object function call occures
 local function onCall(call, params, type, ons)
+    local chan = 1
+    local flag = 'reliable'
+    if not isReliable(ons, call) then
+        chan = 0
+        flag = 'unreliable'
+    end
     local msg = {call}
     local obj = params[1]
     for i = 1, #params do
@@ -137,14 +153,14 @@ local function onCall(call, params, type, ons)
     if ons.type == 'client' then
         --may call client or relay methods, only yourself
         if (obj._ons.client[call] or obj._ons.relay[call]) and obj == ons.clientObject then
-            ons.conn:send(serialize(msg), 1)
+            ons.conn:send(serialize(msg), chan, flag)
         end 
     elseif ons.type == 'server' then
         --may call server or relay or private
         if obj._ons.server[call] or obj._ons.relay[call] then
-            ons.enethost:broadcast(serialize(msg), 1)
+            ons.enethost:broadcast(serialize(msg), chan, flag)
         elseif obj._ons.private[call] then
-            obj._ons.peer:send(serialize(msg), 1)
+            obj._ons.peer:send(serialize(msg), chan, flag)
         end
     end
 end
@@ -312,10 +328,16 @@ local function onEvent(event, ons)
                     o._ons.real[m](unpack(params))
                 end
                 --relay relayed methods
+                local flag = 'reliable'
+                local chan = 1
+                if not isReliable(ons, m) then
+                    flag = 'unreliable'
+                    chan = 0
+                end
                 if o._ons.relay[m] then
                     for i = 1, #ons.world do
                         if ons.world[i] ~= o then
-                            ons.world[i]._ons.peer:send(event.data, 1)
+                            ons.world[i]._ons.peer:send(event.data, chan, flag)
                         end
                     end
                 end
@@ -371,7 +393,7 @@ local function lerpSend(ons)
                     msg[#msg + 1] = obj._ons.frames[3][lerps[k]]
                 end
             end
-            peer:send(serialize(msg), 0)
+            peer:send(serialize(msg), 0, 'unreliable')
         end
     end
     for i = 1, #ons.world do
@@ -410,6 +432,7 @@ local function create(settings)
     else
         ons.debug = false
     end
+    settings.unreliable = settings.unreliable or {}
     ons.settings = settings
     ons.curId = 0
     ons.world = {}
