@@ -7,7 +7,7 @@ local ons
 local font
 
 local function createObj()
-    local o = {x = 400, y = 300, text = "Test", red = true}
+    local o = {x = 400, y = 300, text = "Test", red = false}
     o.move = function(self, x, y)
         self._lerp.x = x -- linearly interpolated values should be set
         self._lerp.y = y -- on server side using special _lerp table
@@ -55,7 +55,7 @@ function love.load(params)
         ons:host(addr)
         ons:onCreate(function(obj)
             for i = 1, #world do
-                obj:init(world[i], world[i].text)
+                obj:init(world[i], world[i].text, world[i].red)
             end
         end)
         love.window.setTitle("Server")
